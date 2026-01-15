@@ -1,0 +1,19 @@
+# Dépendances (seront réinstallées dans le container)
+node_modules
+plugins
+# Fichiers de test (pas besoin en production)
+*.test.py
+
+# Fichiers Git
+.git
+.gitignore
+
+# Documentation
+README.md
+
+# Fichiers de configuration IDE
+.vscode
+.idea
+
+# Logs
+*.log

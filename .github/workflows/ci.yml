@@ -1,0 +1,174 @@
+name: Security Scan
+
+on:
+  push:
+    branches: ['*']
+  pull_request:
+    branches: [main]
+  # Permet de lancer manuellement
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # ===========================================
+  # JOB 1 : Générer le SBOM
+  # ===========================================
+  sbom:
+    name: 📦 Generate SBOM
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📦 Setup Node.js
+        uses: actions/setup-python@v6
+        with:
+          node-version: '3.11'
+
+      - name: 📚 Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: 🔧 Install Syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: 📋 Generate SBOM (CycloneDX)
+        run: syft . -o cyclonedx-json > sbom.json
+
+      - name: 📤 Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
+  # ===========================================
+  # JOB 2 : Scanner avec Grype
+  # ===========================================
+  grype-scan:
+    name: 🔍 Grype Vulnerability Scan
+    needs: sbom
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📥 Download SBOM
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom
+
+      - name: 🔧 Install Grype
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: 🔍 Scan vulnerabilities
+        run: grype sbom:sbom.json -o table
+
+      - name: 📊 Generate JSON report
+        run: grype sbom:sbom.json -o json > grype-results.json
+
+      - name: 📤 Upload Grype results
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-results
+          path: grype-results.json
+
+      # Quality Gate : échoue si vulnérabilités CRITICAL
+      - name: 🚨 Check for Critical vulnerabilities
+        run: |
+          CRITICAL=$(cat grype-results.json | jq '[.matches[] | select(.vulnerability.severity=="Critical")] | length')
+          echo "Critical vulnerabilities: $CRITICAL"
+          if [ "$CRITICAL" -gt 0 ]; then
+            echo "Critical vulnerabilities found!"
+            exit 1
+          fi
+          echo "No critical vulnerabilities"
+  # ===========================================
+  # JOB 4 : Résumé
+  # ===========================================
+  summary:
+    name: 📊 Security Summary
+    needs: [sbom, grype-scan]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+      - name: 📊 Generate Summary
+        run: |
+          echo "## 🔐 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM Generation | ${{ needs.sbom.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Grype Scan | ${{ needs.grype-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+        uses: actions/checkout@v4
+      - name: 📦 Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - run: pip install -r requirements.txt
+      - run: python app.py
+  # ============================================
+  # JOB 2 : TEST - Exécuter les tests
+  # ============================================
+  test:
+    # Ce job a besoin que "build" soit terminé
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+        uses: actions/checkout@v4
+      - name: 📦 Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python app_test.py
+      - name: ✅ Tests passed
+        run: echo "All tests passed successfully!"
+  # ============================================
+  # JOB 3 : DOCKER - Construire l'image
+  # ============================================
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+        uses: actions/checkout@v4
+      - name: 🐳 Build Docker image
+        run: |
+          docker build -t exam1:${{ github.sha }} .
+          docker build -t exam1:latest .
+      - name: 🔍 Verify image
+        run: docker images exam1
+      - name: 🧪 Test container
+        run: |
+          docker run -d -p 5000:5000 --name test-container exam1:latest
+          sleep 5
+          curl --fail http://localhost:5000/health
+          docker stop test-container
+          docker rm test-container
+      - name: ✅ Docker build successful
+        run: echo "Docker image built and tested successfully!"
+
+  # ============================================
+  # JOB 4 : SUMMARY - Résumé final
+  # ============================================
+  summary:
+    needs: [build, test, docker]
+    runs-on: ubuntu-latest
+    if: always()  # S'exécute même si les jobs précédents échouent
+    
+    steps:
+      - name: 📊 Pipeline Summary
+        run: |
+          echo "================================"
+          echo "       PIPELINE SUMMARY         "
+          echo "================================"
+          echo "Build:  ${{ needs.build.result }}"
+          echo "Test:   ${{ needs.test.result }}"
+          echo "Docker: ${{ needs.docker.result }}"
+          echo "================================"
