@@ -5,12 +5,6 @@ on:
   pull_request:
     branches: ["main"]
 jobs:
-  # ===================================== 
-
-  # JOB 1 : Tests unitaires 
-
-  # ===================================== 
-
   tests:
     name: 🧪 Unit Tests
     runs-on: ubuntu-latest
@@ -24,11 +18,6 @@ jobs:
         run: pip install -r requirements.txt
       - name: Run tests
         run: python app_test.py
-  # ===================================== 
-
-  # JOB 2 : Build Docker (bloqué si tests KO) 
-
-  # ===================================== 
   build:
     name: 🐳 Docker Build
     needs: tests
@@ -37,12 +26,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Docker image
         run: docker build -t api:${{ github.sha }} .
-  # ===================================== 
-
-  # JOB 3 : Scan sécurité (Grype) 
-
-  # ===================================== 
-
   security-scan:
     name: 🔍 Security Scan
     needs: build
